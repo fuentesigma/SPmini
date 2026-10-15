@@ -1,0 +1,17 @@
+{
+ "G": 1.0,
+ "L": 48.0,
+ "shape": "iso",
+ "speeds": "flat",
+ "cloud_mass": 40.0,
+ "cloud_radius": 20.0,
+ "cloud_core": 0.5,
+ "concentration": 10.0,
+ "seed": 3,
+ "t_end": 320.0,
+ "samples": 8,
+ "c_kin": 0.25,
+ "c_pot": 0.5,
+ "dtype": "complex128",
+ "n": 384
+}
