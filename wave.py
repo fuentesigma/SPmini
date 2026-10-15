@@ -16,7 +16,7 @@ class Box:
         self.psi = torch.as_tensor(psi)
         self.L, self.four_pi_G = L, four_pi_G
 
-        # External potential (a black hole, a host halo), added to self-gravity in the kicks
+        # External potential
         self.V_ext = V_ext
         self.n = self.psi.shape[0]
         self.dx = L / self.n
@@ -71,12 +71,12 @@ def separation(box, position):
     return d[0][:, None, None], d[1][None, :, None], d[2][None, None, :]
 
 def point_mass(box, G, M, position, softening):
-    # Potential -G M / sqrt(r^2 + eps^2) of a point mass, softened over eps (a grid cannot hold 1/r at r = 0)
+    # Softened potential -G M / sqrt(r^2 + eps^2)
     dx, dy, dz = separation(box, position)
     return -G * M / torch.sqrt(dx ** 2 + dy ** 2 + dz ** 2 + softening ** 2)
 
 def pull(box, G, position, softening):
-    # Acceleration of the point mass towards the field: exactly the reaction to point_mass, so momentum is conserved
+    # Acceleration of the point mass, the exact reaction to point_mass
     dx, dy, dz = separation(box, position)
     weight = box.density() * (dx ** 2 + dy ** 2 + dz ** 2 + softening ** 2) ** -1.5
     return np.array([G * (weight * d).sum().item() * box.dx ** 3 for d in (dx, dy, dz)])
@@ -92,21 +92,100 @@ def blobs(n, L, count, mass, width, spread, seed=3):
     rng = np.random.default_rng(seed)
 
     X, Y, Z = coordinates(n, L)
-    
+
     amplitude = math.sqrt(mass / (2 * math.pi * width ** 2) ** 1.5)
-    
+
     psi = np.zeros((n, n, n), dtype=complex)
-    
+
     for _ in range(count):
         cx, cy, cz = rng.uniform(-spread, spread, 3)
         r2 = (X - cx) ** 2 + (Y - cy) ** 2 + (Z - cz) ** 2
         psi += amplitude * np.exp(-r2 / (4 * width ** 2)) * np.exp(2j * math.pi * rng.uniform())
     return psi
 
+def cloud(n, L, mass, radius, core, shape="iso", concentration=10.0, G=1.0, seed=1, speeds="flat", bands=8):
+    """Cloud with Maxwellian speeds.
+
+    1.- Envelope: 1/(core^2 + r^2) (iso) or NFW with r_s = radius/concentration (nfw), times exp(-(r/radius)^4)
+    2.- Speeds: sigma = v_max/sqrt(2) (flat) or sigma(r) from the isotropic Jeans equation (jeans)
+    3.- psi = sqrt(envelope) x random field. Returns psi and the largest sigma
+    """
+    def envelope(r):
+        if shape == "iso":
+            rho = 1 / (core ** 2 + r ** 2)
+        elif shape == "nfw":
+            x = np.sqrt(r ** 2 + core ** 2) * concentration / radius
+            rho = 1 / (x * (1 + x) ** 2)
+        else:
+            raise ValueError(f"unknown shape {shape}: iso or nfw")
+        return rho * np.exp(-(r / radius) ** 4)
+
+    X, Y, Z = coordinates(n, L)
+    dx = L / n
+    R = np.sqrt(X ** 2 + Y ** 2 + Z ** 2)
+    rho = envelope(R)
+    rho *= mass / (rho.sum() * dx ** 3)
+
+    # Enclosed mass on a fine radial grid
+    r = np.linspace(dx / 100, L / 2, 20000)
+    rho_r = envelope(r)
+    shell = 4 * math.pi * r ** 2 * rho_r
+    M_r = np.concatenate([[0], np.cumsum(0.5 * (shell[1:] + shell[:-1]) * np.diff(r))])
+    rho_r *= mass / M_r[-1]
+    M_r *= mass / M_r[-1]
+
+    rng = np.random.default_rng(seed)
+    k = 2 * math.pi * np.fft.fftfreq(n, d=dx)
+    k2 = k[:, None, None] ** 2 + k[None, :, None] ** 2 + k[None, None, :] ** 2
+
+    # Random modes on a reference grid independent of n: every grid starts from the same cloud
+    v_max = math.sqrt(G * np.max(M_r / r))
+    n_ref = 2 * math.ceil(2 * v_max * L / math.pi)
+    if n_ref > n:
+        raise ValueError(f"the grid needs at least {n_ref} cells per side for these speeds")
+    modes = np.ix_(*[np.round(np.fft.fftfreq(n_ref) * n_ref).astype(int) % n] * 3)
+    # Cell 0 sits at dx/2 - L/2, which depends on n
+    phase = np.exp(1j * k * (dx / 2 - L / 2))
+    shift = phase[:, None, None] * phase[None, :, None] * phase[None, None, :]
+
+    def field(sigma):
+        # |chi_k|^2 ~ exp(-k^2 / (2 sigma^2))
+        noise_k = np.zeros((n, n, n), dtype=complex)
+        noise_k[modes] = rng.normal(size=(n_ref,) * 3) + 1j * rng.normal(size=(n_ref,) * 3)
+        noise_k *= shift
+        chi = np.fft.ifftn(noise_k * np.exp(-k2 / (4 * sigma ** 2)))
+        return chi / math.sqrt(np.mean(np.abs(chi) ** 2))
+
+    if speeds == "flat":
+        sigma = math.sqrt(G * np.max(M_r / r)) / math.sqrt(2)
+        chi = field(sigma)
+    elif speeds == "jeans":
+        integrand = rho_r * G * M_r / r ** 2
+        outer = np.concatenate([np.cumsum((0.5 * (integrand[1:] + integrand[:-1]) * np.diff(r))[::-1])[::-1], [0]])
+        sigma_r = np.sqrt(outer / rho_r)
+        centres = np.geomspace(max(core, dx), radius, bands)
+        u = np.log(np.maximum(R, centres[0])) - np.log(centres[0])
+        step = math.log(centres[1] / centres[0])
+        chi = np.zeros((n, n, n), dtype=complex)
+        for j, c in enumerate(centres):
+            # Hat weights in log r, adding to 1
+            w = np.clip(1 - np.abs(u / step - j), 0, 1)
+            if j == 0:
+                w[u <= 0] = 1
+            if j == bands - 1:
+                w[u / step >= j] = 1
+            chi += np.sqrt(w) * field(float(np.interp(c, r, sigma_r)))
+        sigma = float(np.interp(centres, r, sigma_r).max())
+    else:
+        raise ValueError(f"unknown speeds {speeds}: flat or jeans")
+
+    psi = np.sqrt(rho) * chi
+    return psi * math.sqrt(mass / (np.sum(np.abs(psi) ** 2) * dx ** 3)), sigma
+
 def ground_state(n, L, G, mass, dtau=5e-3, tolerance=1e-8, max_steps=20000, external=None):
     # The lowest energy state of a given mass, found by evolving in imaginary time; external(box) gives a fixed V_ext
     X, Y, Z = coordinates(n, L)
-    
+
     # Gaussian box
     box = Box(np.exp(-(X ** 2 + Y ** 2 + Z ** 2) / (2 * (L / 8) ** 2)) + 0j, L, four_pi_G=4 * math.pi * G)
     if external is not None:

@@ -13,8 +13,10 @@ from cycler import cycler
 INK, INK_2, MUTED = "#0b0b0b", "#52514e", "#898781"
 GRID, AXIS, SURFACE = "#e1e0d9", "#c3c2b7", "#ffffff"
 
-# Series colours, in this order (colour-blind safe as neighbours)
-SERIES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948"]
+# Series colours: teal for models and fits, plum for SPmini haloes, purple and grey for galaxies
+TEAL, PLUM = "#88BBDA", "#F1749C"
+GAS_RICH, GAS_POOR = "#8E70BA", "#978575"
+SERIES = [TEAL, PLUM, "#8695E3", "#C08A1E", "#4E7D5B", "#A8443A", GAS_RICH, GAS_POOR]
 
 # Blue <-> red around a neutral grey, for signed quantities
 DIVERGING = LinearSegmentedColormap.from_list("blue_red", ["#184f95", "#2a78d6", "#b3b1aa", "#e34948", "#a8302f"])

@@ -1,83 +1,89 @@
-# SP mini
+# SPmini
 
-A small Schrödinger–Poisson solver for wave (fuzzy) dark matter, written in Python with PyTorch.
-The code is correct and tested. It is kept as a reference. No further development is planned.
-
-## Background
-
-This is a revival of my master's thesis code, written about twelve years ago in C with adaptive mesh refinement (AMR).
-The thesis aimed to simulate cosmic structure made of a coherent wave of ultralight bosons. Months before my defence,
-Schive, Chiueh & Broadhurst (2014, *Nature Physics* 10, 496) published that result using the GAMER code, and the
-project stopped there.
-
-This version rewrites the solver with a modern architecture: a uniform grid, a pseudo-spectral method, and PyTorch so
-that it runs on a GPU. **It has no AMR.** That limits it to small problems.
+A small Schrödinger–Poisson solver for wave (fuzzy) dark matter, written in Python with PyTorch. It is the code of
+the paper *Fuzzy dark matter hides inside the inner density profiles of galaxies* (Fuentes Aguilar, 2026). 
+SPmini is a lite version of SP (Fuentes Aguilar, Master Thesis, 2015).
 
 ## The equations
 
 A single complex field ψ with density ρ = |ψ|², in units where ħ/m = 1:
 
+    i ∂ψ/∂t = −½ ∇²ψ + (V + V_ext) ψ,  ∇²V = 4πG (ρ − ρ̄)            (static box, used in the paper)
     i ∂ψ/∂τ = −½ ∇²ψ + a V ψ,          ∇²V = |ψ|² − 1               (comoving, cosmological box)
-    i ∂ψ/∂t = −½ ∇²ψ + (V + V_ext) ψ,  ∇²V = 4πG (ρ − ρ̄)            (static box)
-
-Code units: T₀ = (3/2 H₀² Ω_m)^(−1/2), L₀ = √(T₀ ħ/m), and dτ = dt / (a² T₀).
 
 Each time step is kick–drift–kick (Strang splitting):
 
-- **kick:** the potential rotates the phase at each point, ψ → ψ e^(−i a V Δτ/2);
-- **drift:** the kinetic term rotates each Fourier mode,   ψ_k → ψ_k e^(−i k² Δτ/2);
-- **Poisson:** solved exactly in Fourier space, V_k = −ρ_k / k².
+- **kick:** ψ → ψ e^(−i V Δt/2);
+- **drift:** ψ_k → ψ_k e^(−i k² Δt/2);
+- **Poisson:** V_k = −4πG ρ_k / k².
 
-Each piece is exact, so the mass is conserved to rounding error, and the step is second-order accurate in Δτ.
+Each piece is exact, so the mass is conserved to rounding error, and the step is second order in Δt.
+The step is Δt = min(0.25 Δx², 0.5 / max|V|).
 
 ## Files
 
 | File | Contents |
 |---|---|
-| `wave.py` | The solver (`Box`): density, Poisson, time step, step limit, mass, energy, momentum. Point mass (softened potential and its back-reaction). Initial blobs. Ground state by imaginary-time evolution. Soliton profile by shooting. Radial profiles, core fit, power spectrum. |
-| `universe.py` | Flat ΛCDM background, code units, the expansion a(τ), and the initial wave function from a linear P(k) in the growing mode. |
-| `run.py` | All settings and the command line (below). |
-| `plotstyle.py` | Shared figure style. |
-| `data/psidm_pk_z1000.txt` | Linear power spectrum at z = 1000 (k in 1/Mpc, P in Mpc³), with the wave dark matter cut-off. |
-| `data/walker2009_sculptor.fits` | Sculptor stellar velocities (Walker et al. 2009, VizieR J/AJ/137/3100) |
+| `wave.py` | The solver (`Box`), initial conditions (`cloud`, `blobs`), ground state, soliton profile, radial profiles. |
+| `halo.py` | Physical units, R200, NFW and coreNFW, the measurements of Mancera Piña et al. (2026), soliton + NFW, core mass of Chan et al. (2022). |
+| `universe.py` | Flat ΛCDM background and cosmological initial conditions. |
+| `run.py` | All settings and the command line. |
+| `export_profile.py` | Radial profiles of the snapshots of a run, used by the coreness figure. |
+| `plotstyle.py` | Figure style. |
+| `data/psidm_pk_z1000.txt` | Linear power spectrum at z = 1000 with the wave dark matter cut-off (cosmological box only). |
+| `results/corenfw/` | Measurements and summaries of the runs of the paper (no snapshots). |
+| `results/solitonnfw/` | Soliton + NFW, measured in the same way. |
 
-| `results/` | Outputs of the runs below. |
+## Requirements
 
-## Usage
+Python 3 with `torch`, `numpy`, `scipy`, `matplotlib` and `colossus` (tested with torch 2.6). Without `colossus` the
+NFW reference is `nan`. `device=auto` uses a GPU when there is one. The paper runs use `dtype=complex128`, which Apple
+GPUs do not support.
 
-Requires Python 3 with `torch`, `numpy`, `scipy` and `matplotlib` (tested with torch 2.6).
+## Tests
 
-    python run.py check        # tests of the physics against exact answers (about 1 min on CPU)
-    python run.py cosmo        # cosmological box, z = 1000 -> 10            -> results/cosmo/
-    python run.py soliton      # random blobs collapse into a soliton         -> results/soliton/
-    python run.py blackhole    # a point mass in a soliton                    -> results/blackhole/
+    python run.py check
 
-Any setting can be changed on the command line, e.g. `python run.py soliton t_end=60 blobs=12`. The settings and their
-defaults are the `COSMO`, `SOLITON` and `BLACKHOLE` dictionaries at the top of `run.py`. `device=auto` uses a GPU (CUDA
-or Apple MPS) when one is available. MPS has no double precision, so use `dtype=complex64` there.
+Twelve tests against exact results (about 1 min on a CPU): Poisson for one mode, spreading of a free Gaussian packet,
+mass and energy conservation, second order in time, stationary soliton, code units, linear growth, ground state of a
+point mass, momentum with a point mass, static-box units, Fourier interpolation, coreNFW fit.
 
-## Checks
+## Reproducing the paper
 
-`python run.py check` runs nine tests. All pass:
+Any setting of `run.py` can be changed on the command line as `key=value`. The defaults of `CORENFW` are a small test
+halo, not the runs of the paper.
 
-1. Poisson equation for one Fourier mode (error about 1e−15).
-2. A free Gaussian packet spreads as w² = 1 + (t/2)².
-3. Mass and energy are conserved in a self-gravitating box.
-4. Kick–drift–kick is second order (measured order 2.01).
-5. The soliton ground state stays stationary under real-time evolution.
-6. Code units: ħ/m = 1 and 4πG ρ̄ = 1.
-7. A small density wave grows like a in the matter era (linear theory).
-8. Ground-state energy of a softened point mass, against a 1D radial solution.
-9. Total momentum (field plus point mass) is conserved while the point mass falls through a soliton.
+**Halo 40** (cloud mass 40, seeds 1 to 4, main grid 384³, check grid 320³):
 
-The black-hole run was also used as a stress test. Over t = 40, energy stayed constant to about 1e−5 and momentum to
-about 1e−6. Halving the time step, or refining the grid from 80³ to 128³, gave the same trajectory.
+    python run.py corenfw L=48 cloud_mass=40 cloud_radius=20 cloud_core=0.5 concentration=10 shape=iso speeds=flat \
+        t_end=320 samples=8 masses=8e-23,1e-22,2e-22 halo_masses=5e8,1e9,2e9 dtype=complex128 \
+        seed=1 resolutions=320,384 out=results/corenfw/iso_hpc
 
-## Limitations
+    python run.py corenfw ... seed=2 resolutions=384 out=results/corenfw/iso_seed2      # and seeds 3, 4
 
-- **No AMR.** The uniform grid cannot resolve a soliton of about 10 pc inside a box many kpc across. In the default
-  cosmological run (4 Mpc, 128³), 68% of cells are under-resolved by z = 10 (fewer than 4 cells per de Broglie
-  wavelength). The cosmological results are therefore qualitative only.
-- **Point mass:** its potential is softened over 2 cells. The heaviest black-hole ground states (M_bh ≳ 0.5 M_soliton)
-  are set mostly by this softening. The figure compares them with a black hole softened the same way.
-- **Black-hole experiment:** numerical engineering only. No physical scenario motivates it.
+**Halo 300** (cloud mass 300, one seed, main grid 640³, check grid 512³):
+
+    python run.py corenfw L=48 cloud_mass=300 cloud_radius=20 cloud_core=0.5 concentration=10 shape=iso speeds=flat \
+        t_end=320 samples=8 masses=2e-22,3e-22,4e-22,6e-22 halo_masses=5e8,1e9,2e9 dtype=complex128 \
+        seed=1 resolutions=512,640 out=results/corenfw/heavy_M300
+
+Each run writes `summary.txt` (time averages per grid and the convergence between the first two grids) and, per grid,
+`measurements.txt` (one row per snapshot and pair). I performed a few runs on HPC. In particular, on one V100 in double
+precision, 320³ takes about 1 h and 384³ about 3 h; 640³ takes about 10 h on an H100. 
+
+**Soliton + NFW** (no simulation; validated against the two haloes):
+
+    python run.py solitonnfw
+
+**Figures:**
+
+    python export_profile.py results/corenfw/iso_hpc/n384      # needs the snapshots of the run
+    python run.py figures pina=<folder>
+
+The SPmini side of every figure comes from the summaries in `results/`, so the figures can be drawn without running the simulations again.
+
+## Other commands
+
+`cosmo` (cosmological box, z = 1000 to 10), `soliton` (blobs collapse into a soliton) and `blackhole` (a point mass in
+a soliton) are kept from earlier work and are not used in the paper. The uniform grid cannot resolve a soliton in a
+cosmological box, so `cosmo` is qualitative only.
